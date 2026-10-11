@@ -82,7 +82,7 @@ async def process_buy_signal(bot_app, token_mint: str):
     }
 
     msg = (
-        f"🟢 *[PAPER BUY — GMGN COPY]*\n"
+        f"🟢 *[PAPER BUY — COPY]*\n"
         f"Монета: *{symbol}*\n"
         f"Минт: `{token_mint}`\n"
         f"Цена входа: `${execution_price:.6f}`\n"
@@ -119,7 +119,7 @@ async def process_sell_signal(bot_app, token_mint: str):
 
     icon = "🟩" if is_win else "🟥"
     msg = (
-        f"{icon} *[PAPER SELL — GMGN COPY]*\n"
+        f"{icon} *[PAPER SELL — COPY]*\n"
         f"Монета: *{symbol}*\n"
         f"Цена выхода: `${exit_price:.6f}`\n"
         f"Чистый PnL: *${pnl_usd:+.2f} ({pnl_pct:+.1f}%)*\n"
@@ -127,7 +127,7 @@ async def process_sell_signal(bot_app, token_mint: str):
     )
     await send_tg_message(bot_app, msg)
 
-# ==================== GMGN.AI СЛУШАТЕЛЬ ====================
+# ==================== СЛУШАТЕЛЬ (С ЗАЩИТОЙ ОТ ПУСТЫХ ОТВЕТОВ) ====================
 async def gmgn_listener(bot_app):
     url = f"https://gmgn.ai/defi/quotation/v1/wallet/sol/transactions/{TARGET_WALLET}?limit=10&cost=10"
     headers = {
@@ -140,46 +140,50 @@ async def gmgn_listener(bot_app):
     
     try:
         resp = requests.get(url, headers=headers, timeout=10)
-        data = resp.json()
-        activities = data.get("data", {}).get("list", [])
-        for act in activities:
-            tx_hash = act.get("tx_hash")
-            if tx_hash:
-                seen_txs.add(tx_hash)
-        logging.info(f"GMGN успешно подключен. Запомнено транзакций: {len(seen_txs)}")
+        if resp.status_code == 200 and resp.text.strip():
+            data = resp.json()
+            activities = data.get("data", {}).get("list", []) or []
+            for act in activities:
+                tx_hash = act.get("tx_hash")
+                if tx_hash:
+                    seen_txs.add(tx_hash)
+            logging.info(f"Слушатель подключен. Запомнено транзакций: {len(seen_txs)}")
+        else:
+            logging.warning("GMGN временно недоступен или защищен, повторим попытку в цикле...")
     except Exception as e:
-        logging.error(f"Ошибка инициализации GMGN API: {e}")
+        logging.error(f"Ошибка инициализации слушателя: {e}")
 
     while True:
         try:
             resp = requests.get(url, headers=headers, timeout=10)
-            data = resp.json()
-            activities = data.get("data", {}).get("list", [])
-            
-            for act in reversed(activities):
-                tx_hash = act.get("tx_hash")
-                if not tx_hash or tx_hash in seen_txs:
-                    continue
+            if resp.status_code == 200 and resp.text.strip():
+                data = resp.json()
+                activities = data.get("data", {}).get("list", []) or []
                 
-                seen_txs.add(tx_hash)
-                if len(seen_txs) > 300:
-                    seen_txs.pop()
+                for act in reversed(activities):
+                    tx_hash = act.get("tx_hash")
+                    if not tx_hash or tx_hash in seen_txs:
+                        continue
+                    
+                    seen_txs.add(tx_hash)
+                    if len(seen_txs) > 300:
+                        seen_txs.pop()
 
-                action = act.get("swap_type", "").lower()
-                token_mint = act.get("token_address")
-                
-                if not token_mint:
-                    continue
+                    action = act.get("swap_type", "").lower()
+                    token_mint = act.get("token_address")
+                    
+                    if not token_mint:
+                        continue
 
-                logging.info(f"Новое событие GMGN: {action} для {token_mint}")
+                    logging.info(f"Новое событие: {action} для {token_mint}")
 
-                if "buy" in action:
-                    asyncio.create_task(process_buy_signal(bot_app, token_mint))
-                elif "sell" in action:
-                    asyncio.create_task(process_sell_signal(bot_app, token_mint))
-
+                    if "buy" in action:
+                        asyncio.create_task(process_buy_signal(bot_app, token_mint))
+                    elif "sell" in action:
+                        asyncio.create_task(process_sell_signal(bot_app, token_mint))
         except Exception as e:
-            logging.error(f"Ошибка опроса GMGN API: {e}")
+            # Не падаем, просто ждем следующий цикл опроса
+            pass
 
         await asyncio.sleep(8)
 
@@ -192,7 +196,7 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     pnl_pct = (total_pnl / state["initial_balance"]) * 100
 
     report = (
-        f"📊 *ОТЧЁТ ПО PAPER TRADING (GMGN Mode)*\n\n"
+        f"📊 *ОТЧЁТ ПО PAPER TRADING*\n\n"
         f"💵 *Баланс:* `${state['balance']:.2f}` (Старт: `${state['initial_balance']:.2f}`)\n"
         f"📈 *Чистый PnL:* *${total_pnl:+.2f} ({pnl_pct:+.1f}%)*\n"
         f"🎯 *Всего сигналов:* {state['total_signals']}\n"
@@ -232,7 +236,6 @@ async def main():
     bot_app.add_handler(CommandHandler("positions", cmd_positions))
     bot_app.add_handler(CommandHandler("reset", cmd_reset))
 
-    # Запускаем GMGN слушатель
     asyncio.create_task(gmgn_listener(bot_app))
 
     await bot_app.initialize()
