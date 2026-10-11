@@ -245,8 +245,13 @@ def main():
     app.add_handler(CommandHandler("positions", cmd_positions))
     app.add_handler(CommandHandler("reset", cmd_reset))
 
-    # Запуск параллельного слушателя Solana
-    loop = asyncio.get_event_loop()
+  # Запуск параллельного слушателя Solana безопасно для любых версий Python
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
     loop.create_task(solana_listener(app))
 
     print("🚀 Симулятор Paper Trading запущен!")
