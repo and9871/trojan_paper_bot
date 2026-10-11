@@ -189,8 +189,9 @@ async def solana_listener(app):
                             if "buy" in logs.lower():
                                 asyncio.create_task(process_buy_signal(app, dummy_token, 0.001, 0.10))
                             elif "sell" in logs.lower():
-                                asyncio.create_task(process_sell_signal(app, dummy_token))
-        except Exception as e:
+        asyncio.create_task(process_sell_signal(app, dummy_token))
+
+except Exception as e:
     print(f"Ошибка WebSocket: {e}. Переподключение через 5 сек...")
     try:
         await asyncio.sleep(5)
