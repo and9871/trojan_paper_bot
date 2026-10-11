@@ -8,19 +8,19 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 # ==================== НАСТРОЙКИ ====================
-TELEGRAM_BOT_TOKEN = "8899550041:AAGki8qnv-XPjJVNc5ATa4p_mIJs87GpfBU"
-TELEGRAM_CHAT_ID = "5689611608"
+TELEGRAM_BOT_TOKEN = "8899550041:AAGki8qnv-XPjJVNc5ATa4p_mIJs87GpfBU"  # Твой токен от BotFather
+TELEGRAM_CHAT_ID = "5689611608"                                    # Твой Telegram ID
 HELIUS_API_KEY = "ef5ff0b7-0073-40ea-8d5a-d8e334a64809"
 
 # Адрес кошелька для отслеживания
 TARGET_WALLET = "4NGX3sD6PQJLwPCSHdLTACFzLRqR1JhpUEtjpsmCAwGn"
 
 # Параметры симуляции Trojan
-LATENCY_DELAY = 2.0         
-SLIPPAGE_LIMIT = 0.15       
-PRICE_IMPACT_LIMIT = 0.20   
-TRADE_AMOUNT_USD = 50.0     
-GAS_FEE_USD = 0.50          
+LATENCY_DELAY = 2.0         # Искусственная задержка (секунды)
+SLIPPAGE_LIMIT = 0.15       # Максимальное проскальзывание (15%)
+PRICE_IMPACT_LIMIT = 0.20   # Лимит ценового щита (20%)
+TRADE_AMOUNT_USD = 50.0     # Размер виртуального входа ($)
+GAS_FEE_USD = 0.50          # Виртуальная комиссия за круг (покупка + продажа)
 
 # ==================== СОСТОЯНИЕ БОТА ====================
 state = {
@@ -30,8 +30,8 @@ state = {
     "copied_trades": 0,
     "blocked_trades": 0,
     "total_gas_spent": 0.0,
-    "positions": {},   
-    "closed_trades": [] 
+    "positions": {},   # token_mint: {"buy_price": float, "amount_usd": float, "symbol": str, "time": float}
+    "closed_trades": [] # [{"pnl_usd": float, "pnl_pct": float, "win": bool}]
 }
 
 logging.basicConfig(level=logging.INFO)
@@ -52,6 +52,7 @@ def get_token_info(token_mint: str):
     return 0.0, token_mint[:6]
 
 async def send_tg_message(bot_app, text: str):
+    """Отправка уведомления в Telegram."""
     if TELEGRAM_CHAT_ID:
         try:
             await bot_app.bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=text, parse_mode="Markdown")
@@ -66,24 +67,29 @@ async def process_buy_signal(bot_app, token_mint: str):
     if initial_price == 0:
         initial_price = 0.00001 
 
+    # 1. Защита "Ценовой щит" (Price Impact)
     estimated_impact = 0.05 
     if estimated_impact > PRICE_IMPACT_LIMIT:
         state["blocked_trades"] += 1
         await send_tg_message(bot_app, f"🛑 *[СДЕЛКА БЛОКИРОВАНА]* Токен: `{symbol}` (Price Impact превышен)")
         return
 
+    # 2. Имитация задержки обработки Trojan (Latency)
     await asyncio.sleep(LATENCY_DELAY)
 
+    # 3. Запрос реальной цены ПОСЛЕ задержки
     execution_price, _ = get_token_info(token_mint)
     if execution_price == 0:
         execution_price = initial_price * 1.05
 
+    # 4. Проверка на проскальзывание цены
     price_change = (execution_price - initial_price) / initial_price if initial_price > 0 else 0
     if price_change > SLIPPAGE_LIMIT:
         state["blocked_trades"] += 1
         await send_tg_message(bot_app, f"🛑 *[СДЕЛКА БЛОКИРОВАНА]* Токен: `{symbol}` (Проскальзывание превышено)")
         return
 
+    # 5. Исполнение виртуальной покупки
     if state["balance"] < TRADE_AMOUNT_USD:
         await send_tg_message(bot_app, "⚠️ *[ОШИБКА]* Недостаточно виртуального баланса для покупки!")
         return
@@ -101,9 +107,10 @@ async def process_buy_signal(bot_app, token_mint: str):
         f"🟢 *[PAPER BUY — TROJAN]*\n"
         f"Монета: *{symbol}*\n"
         f"Минт: `{token_mint}`\n"
+        f"Задержка: {LATENCY_DELAY}s\n"
         f"Цена входа: `${execution_price:.6f}`\n"
         f"Сумма: `${TRADE_AMOUNT_USD}`\n"
-        f"Баланс: `${state['balance']:.2f}`"
+        f"Свободный баланс: `${state['balance']:.2f}`"
     )
     await send_tg_message(bot_app, msg)
 
@@ -139,11 +146,12 @@ async def process_sell_signal(bot_app, token_mint: str):
         f"Монета: *{symbol}*\n"
         f"Цена выхода: `${exit_price:.6f}`\n"
         f"Чистый PnL: *${pnl_usd:+.2f} ({pnl_pct:+.1f}%)*\n"
-        f"Баланс: `${state['balance']:.2f}`"
+        f"Комиссия (Gas): `${GAS_FEE_USD}`\n"
+        f"Новый баланс: `${state['balance']:.2f}`"
     )
     await send_tg_message(bot_app, msg)
 
-# ==================== WEBSOCKET СЛУШАТЕЛЬ ====================
+# ==================== WEBSOCKET СЛУШАТЕЛЬ SOLANA ====================
 async def solana_listener(bot_app):
     ws_url = f"wss://mainnet.helius-rpc.com/?api-key={HELIUS_API_KEY}"
     
@@ -173,6 +181,7 @@ async def solana_listener(bot_app):
                         tx_result = data["params"]["result"]
                         logs_str = str(tx_result).lower()
                         
+                        # ДИНАМИЧЕСКИЙ СБОР ЛЮБОГО ТОКЕНА ИЗ ТРАНЗАКЦИИ
                         token_mint = "So11111111111111111111111111111111111111112"
                         try:
                             meta = tx_result.get("transaction", {}).get("meta", {})
@@ -207,11 +216,14 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     pnl_pct = (total_pnl / state["initial_balance"]) * 100
 
     report = (
-        f"📊 *ОТЧЁТ ПО PAPER TRADING*\n\n"
-        f"💵 *Баланс:* `${state['balance']:.2f}`\n"
-        f"📈 *PnL:* *${total_pnl:+.2f} ({pnl_pct:+.1f}%)*\n"
-        f"🎯 *Сигналов:* {state['total_signals']} | Скопировано: {state['copied_trades']}\n"
-        f"🏆 *Winrate:* {winrate:.1f}%"
+        f"📊 *ОТЧЁТ ПО PAPER TRADING (Trojan Mode)*\n\n"
+        f"💵 *Баланс:* `${state['balance']:.2f}` (Старт: `${state['initial_balance']:.2f}`)\n"
+        f"📈 *Чистый PnL:* *${total_pnl:+.2f} ({pnl_pct:+.1f}%)*\n"
+        f"🎯 *Всего сигналов:* {state['total_signals']}\n"
+        f"✅ *Скопировано:* {state['copied_trades']}\n"
+        f"🛑 *Отклонено (Slippage/Shield):* {state['blocked_trades']}\n"
+        f"🏆 *Winrate:* {winrate:.1f}% ({wins}W / {len(trades)-wins}L)\n"
+        f"💸 *Потрачено на виртуальный газ:* `${state['total_gas_spent']:.2f}`"
     )
     await update.message.reply_text(report, parse_mode="Markdown")
 
@@ -235,7 +247,7 @@ async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     state["total_gas_spent"] = 0.0
     state["positions"].clear()
     state["closed_trades"].clear()
-    await update.message.reply_text("🔄 Сброшено до $200!")
+    await update.message.reply_text("🔄 Баланс и статистика успешно сброшены к $200!")
 
 async def main():
     bot_app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
@@ -251,7 +263,6 @@ async def main():
     await bot_app.start()
     await bot_app.updater.start_polling()
 
-    # Держим приложение запущенным
     stop_event = asyncio.Event()
     await stop_event.wait()
 
