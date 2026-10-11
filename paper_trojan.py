@@ -179,12 +179,15 @@ async def solana_listener(app):
                     data = json.loads(msg)
                     if "params" in data and "result" in data["params"]:
                         logs = str(data["params"]["result"])
+                        logs_lower = logs.lower()
                         
-                        if "route" in logs or "swap" in logs.lower():
+                        # Расширенный фильтр для Raydium, Jupiter и Pump.fun
+                        if any(kw in logs_lower for kw in ["swap", "route", "pump", "instruction: buy", "instruction: sell"]):
                             dummy_token = "So11111111111111111111111111111111111111112"
-                            if "buy" in logs.lower():
+                            
+                            if any(b_kw in logs_lower for b_kw in ["buy", "instruction: buy"]):
                                 asyncio.create_task(process_buy_signal(app, dummy_token, 0.001, 0.10))
-                            elif "sell" in logs.lower():
+                            elif any(s_kw in logs_lower for s_kw in ["sell", "instruction: sell"]):
                                 asyncio.create_task(process_sell_signal(app, dummy_token))
 
         except Exception as e:
