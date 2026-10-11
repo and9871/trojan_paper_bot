@@ -3,24 +3,22 @@ import json
 import logging
 import time
 import requests
-import websockets
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 # ==================== НАСТРОЙКИ ====================
-TELEGRAM_BOT_TOKEN = "8899550041:AAGPwEuBfufBK3EREkOHzyCobkBaij-ziJA"  # Твой токен от BotFather
-TELEGRAM_CHAT_ID = "5689611608"                                    # Твой Telegram ID
-HELIUS_API_KEY = "ef5ff0b7-0073-40ea-8d5a-d8e334a64809"
+TELEGRAM_BOT_TOKEN = "8899550041:AAGPwEuBfufBK3EREkOHzyCobkBaij-ziJA"
+TELEGRAM_CHAT_ID = "5689611608"
 
-# Адрес кошелька для отслеживания
+# Адрес целевого кошелька для отслеживания
 TARGET_WALLET = "4NGX3sD6PQJLwPCSHdLTACFzLRqR1JhpUEtjpsmCAwGn"
 
-# Параметры симуляции Trojan
-LATENCY_DELAY = 2.0         # Искусственная задержка (секунды)
-SLIPPAGE_LIMIT = 0.15       # Максимальное проскальзывание (15%)
-PRICE_IMPACT_LIMIT = 0.20   # Лимит ценового щита (20%)
-TRADE_AMOUNT_USD = 50.0     # Размер виртуального входа ($)
-GAS_FEE_USD = 0.50          # Виртуальная комиссия за круг (покупка + продажа)
+# Параметры симуляции
+LATENCY_DELAY = 2.0         
+SLIPPAGE_LIMIT = 0.15       
+PRICE_IMPACT_LIMIT = 0.20   
+TRADE_AMOUNT_USD = 50.0     
+GAS_FEE_USD = 0.50          
 
 # ==================== СОСТОЯНИЕ БОТА ====================
 state = {
@@ -30,15 +28,14 @@ state = {
     "copied_trades": 0,
     "blocked_trades": 0,
     "total_gas_spent": 0.0,
-    "positions": {},   # token_mint: {"buy_price": float, "amount_usd": float, "symbol": str, "time": float}
-    "closed_trades": [] # [{"pnl_usd": float, "pnl_pct": float, "win": bool}]
+    "positions": {},   
+    "closed_trades": [] 
 }
 
 logging.basicConfig(level=logging.INFO)
 
 # ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
 def get_token_info(token_mint: str):
-    """Получение цены и реального символа любого токена через DexScreener API."""
     try:
         url = f"https://api.dexscreener.com/latest/dex/tokens/{token_mint}"
         resp = requests.get(url, timeout=5).json()
@@ -52,44 +49,25 @@ def get_token_info(token_mint: str):
     return 0.0, token_mint[:6]
 
 async def send_tg_message(bot_app, text: str):
-    """Отправка уведомления в Telegram."""
     if TELEGRAM_CHAT_ID:
         try:
             await bot_app.bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=text, parse_mode="Markdown")
         except Exception as e:
             logging.error(f"Ошибка отправки Telegram: {e}")
 
-# ==================== ЛОГИКА ТОРГОВЛИ ====================
+# ==================== ТОРГОВАЯ ЛОГИКА ====================
 async def process_buy_signal(bot_app, token_mint: str):
     state["total_signals"] += 1
-
     initial_price, symbol = get_token_info(token_mint)
     if initial_price == 0:
         initial_price = 0.00001 
 
-    # 1. Защита "Ценовой щит" (Price Impact)
-    estimated_impact = 0.05 
-    if estimated_impact > PRICE_IMPACT_LIMIT:
-        state["blocked_trades"] += 1
-        await send_tg_message(bot_app, f"🛑 *[СДЕЛКА БЛОКИРОВАНА]* Токен: `{symbol}` (Price Impact превышен)")
-        return
-
-    # 2. Имитация задержки обработки Trojan (Latency)
     await asyncio.sleep(LATENCY_DELAY)
 
-    # 3. Запрос реальной цены ПОСЛЕ задержки
     execution_price, _ = get_token_info(token_mint)
     if execution_price == 0:
         execution_price = initial_price * 1.05
 
-    # 4. Проверка на проскальзывание цены
-    price_change = (execution_price - initial_price) / initial_price if initial_price > 0 else 0
-    if price_change > SLIPPAGE_LIMIT:
-        state["blocked_trades"] += 1
-        await send_tg_message(bot_app, f"🛑 *[СДЕЛКА БЛОКИРОВАНА]* Токен: `{symbol}` (Проскальзывание превышено)")
-        return
-
-    # 5. Исполнение виртуальной покупки
     if state["balance"] < TRADE_AMOUNT_USD:
         await send_tg_message(bot_app, "⚠️ *[ОШИБКА]* Недостаточно виртуального баланса для покупки!")
         return
@@ -104,13 +82,12 @@ async def process_buy_signal(bot_app, token_mint: str):
     }
 
     msg = (
-        f"🟢 *[PAPER BUY — TROJAN]*\n"
+        f"🟢 *[PAPER BUY — GMGN COPY]*\n"
         f"Монета: *{symbol}*\n"
         f"Минт: `{token_mint}`\n"
-        f"Задержка: {LATENCY_DELAY}s\n"
         f"Цена входа: `${execution_price:.6f}`\n"
         f"Сумма: `${TRADE_AMOUNT_USD}`\n"
-        f"Свободный баланс: `${state['balance']:.2f}`"
+        f"Баланс: `${state['balance']:.2f}`"
     )
     await send_tg_message(bot_app, msg)
 
@@ -142,70 +119,66 @@ async def process_sell_signal(bot_app, token_mint: str):
 
     icon = "🟩" if is_win else "🟥"
     msg = (
-        f"{icon} *[PAPER SELL — TROJAN]*\n"
+        f"{icon} *[PAPER SELL — GMGN COPY]*\n"
         f"Монета: *{symbol}*\n"
         f"Цена выхода: `${exit_price:.6f}`\n"
         f"Чистый PnL: *${pnl_usd:+.2f} ({pnl_pct:+.1f}%)*\n"
-        f"Комиссия (Gas): `${GAS_FEE_USD}`\n"
-        f"Новый баланс: `${state['balance']:.2f}`"
+        f"Баланс: `${state['balance']:.2f}`"
     )
     await send_tg_message(bot_app, msg)
 
-# ==================== WEBSOCKET СЛУШАТЕЛЬ SOLANA ====================
-async def solana_listener(bot_app):
-    ws_url = f"wss://mainnet.helius-rpc.com/?api-key={HELIUS_API_KEY}"
-    
-    payload = {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "transactionSubscribe",
-        "params": [
-            {"accountInclude": [TARGET_WALLET]},
-            {
-                "commitment": "confirmed",
-                "encoding": "jsonParsed",
-                "transactionDetails": "full"
-            }
-        ]
+# ==================== GMGN.AI СЛУШАТЕЛЬ ====================
+async def gmgn_listener(bot_app):
+    url = f"https://gmgn.ai/api/v1/wallet_activity/sol?wallet={TARGET_WALLET}&limit=10"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
+    
+    seen_txs = set()
+    
+    # Инициализация: запоминаем текущие сделки, чтобы не дублировать старое при запуске
+    try:
+        resp = requests.get(url, headers=headers, timeout=10).json()
+        activities = resp.get("data", {}).get("activities", [])
+        for act in activities:
+            tx_hash = act.get("tx_hash")
+            if tx_hash:
+                seen_txs.add(tx_hash)
+        logging.info(f"GMGN успешно подключен. Запомнено транзакций: {len(seen_txs)}")
+    except Exception as e:
+        logging.error(f"Ошибка инициализации GMGN: {e}")
 
     while True:
         try:
-            async with websockets.connect(ws_url) as ws:
-                await ws.send(json.dumps(payload))
-                logging.info("WebSocket успешно подключен!")
+            resp = requests.get(url, headers=headers, timeout=10).json()
+            activities = resp.get("data", {}).get("activities", [])
+            
+            for act in reversed(activities):
+                tx_hash = act.get("tx_hash")
+                if not tx_hash or tx_hash in seen_txs:
+                    continue
                 
-                async for msg in ws:
-                    data = json.loads(msg)
-                    if "params" in data and "result" in data["params"]:
-                        tx_result = data["params"]["result"]
-                        logs_str = str(tx_result).lower()
-                        
-                        # ДИНАМИЧЕСКИЙ СБОР ЛЮБОГО ТОКЕНА ИЗ ТРАНЗАКЦИИ
-                        token_mint = "So11111111111111111111111111111111111111112"
-                        try:
-                            meta = tx_result.get("transaction", {}).get("meta", {})
-                            post_balances = meta.get("postTokenBalances", [])
-                            for b in post_balances:
-                                candidate = b.get("mint")
-                                if candidate and candidate != "So11111111111111111111111111111111111111112":
-                                    token_mint = candidate
-                                    break
-                        except Exception:
-                            pass
+                seen_txs.add(tx_hash)
+                if len(seen_txs) > 300:
+                    seen_txs.pop()
 
-                        if any(kw in logs_str for kw in ["swap", "route", "pump", "raydium", "jupiter"]):
-                            if any(b_kw in logs_str for b_kw in ["buy", "mint", "create"]):
-                                asyncio.create_task(process_buy_signal(bot_app, token_mint))
-                            elif any(s_kw in logs_str for s_kw in ["sell", "close"]):
-                                asyncio.create_task(process_sell_signal(bot_app, token_mint))
+                action = act.get("event", "").lower()
+                token_mint = act.get("token_address")
+                
+                if not token_mint:
+                    continue
+
+                logging.info(f"Новое событие GMGN: {action} для {token_mint}")
+
+                if "buy" in action:
+                    asyncio.create_task(process_buy_signal(bot_app, token_mint))
+                elif "sell" in action:
+                    asyncio.create_task(process_sell_signal(bot_app, token_mint))
 
         except Exception as e:
-            print(f"Ошибка WebSocket: {e}. Переподключение...")
-            try:
-                await asyncio.sleep(5)
-            except RuntimeError:
-                break
+            logging.error(f"Ошибка опроса GMGN: {e}")
+
+        await asyncio.sleep(6) # Опрос каждые 6 секунд
 
 # ==================== TELEGRAM КОМАНДЫ ====================
 async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -216,14 +189,14 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     pnl_pct = (total_pnl / state["initial_balance"]) * 100
 
     report = (
-        f"📊 *ОТЧЁТ ПО PAPER TRADING (Trojan Mode)*\n\n"
+        f"📊 *ОТЧЁТ ПО PAPER TRADING (GMGN Mode)*\n\n"
         f"💵 *Баланс:* `${state['balance']:.2f}` (Старт: `${state['initial_balance']:.2f}`)\n"
         f"📈 *Чистый PnL:* *${total_pnl:+.2f} ({pnl_pct:+.1f}%)*\n"
         f"🎯 *Всего сигналов:* {state['total_signals']}\n"
         f"✅ *Скопировано:* {state['copied_trades']}\n"
-        f"🛑 *Отклонено (Slippage/Shield):* {state['blocked_trades']}\n"
+        f"🛑 *Отклонено:* {state['blocked_trades']}\n"
         f"🏆 *Winrate:* {winrate:.1f}% ({wins}W / {len(trades)-wins}L)\n"
-        f"💸 *Потрачено на виртуальный газ:* `${state['total_gas_spent']:.2f}`"
+        f"💸 *Потрачено на газ:* `${state['total_gas_spent']:.2f}`"
     )
     await update.message.reply_text(report, parse_mode="Markdown")
 
@@ -247,7 +220,7 @@ async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     state["total_gas_spent"] = 0.0
     state["positions"].clear()
     state["closed_trades"].clear()
-    await update.message.reply_text("🔄 Баланс и статистика успешно сброшены к $200!")
+    await update.message.reply_text("🔄 Сброшено до $200!")
 
 async def main():
     bot_app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
@@ -256,8 +229,8 @@ async def main():
     bot_app.add_handler(CommandHandler("positions", cmd_positions))
     bot_app.add_handler(CommandHandler("reset", cmd_reset))
 
-    # Запускаем фоновый слушатель Solana параллельно с ботом
-    asyncio.create_task(solana_listener(bot_app))
+    # Запускаем GMGN слушатель
+    asyncio.create_task(gmgn_listener(bot_app))
 
     await bot_app.initialize()
     await bot_app.start()
