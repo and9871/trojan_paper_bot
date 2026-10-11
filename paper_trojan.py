@@ -10,13 +10,11 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 TELEGRAM_BOT_TOKEN = "8899550041:AAGQXFkVIam0qv77DSwVhzdAM_EM_MvoX0o"
 TELEGRAM_CHAT_ID = "5689611608"
 
-# Адрес целевого кошелька для отслеживания
+# Целевой кошелек с твоего скриншота
 TARGET_WALLET = "4NGX3sD6PQJLwPCSHdLTACFzLRqR1JhpUEtjpsmCAwGn"
 
 # Параметры симуляции
 LATENCY_DELAY = 2.0         
-SLIPPAGE_LIMIT = 0.15       
-PRICE_IMPACT_LIMIT = 0.20   
 TRADE_AMOUNT_USD = 50.0     
 GAS_FEE_USD = 0.50          
 
@@ -69,7 +67,7 @@ async def process_buy_signal(bot_app, token_mint: str):
         execution_price = initial_price * 1.05
 
     if state["balance"] < TRADE_AMOUNT_USD:
-        await send_tg_message(bot_app, "⚠️ *[ОШИБКА]* Недостаточно виртуального баланса для покупки!")
+        await send_tg_message(bot_app, "⚠️ *[ОШИБКА]* Недостаточно виртуального баланса!")
         return
 
     state["balance"] -= TRADE_AMOUNT_USD
@@ -82,7 +80,7 @@ async def process_buy_signal(bot_app, token_mint: str):
     }
 
     msg = (
-        f"🟢 *[PAPER BUY — SOLANA RPC]*\n"
+        f"🟢 *[PAPER BUY — COPIED]*\n"
         f"Монета: *{symbol}*\n"
         f"Минт: `{token_mint}`\n"
         f"Цена входа: `${execution_price:.6f}`\n"
@@ -93,17 +91,10 @@ async def process_buy_signal(bot_app, token_mint: str):
 
 async def process_sell_signal(bot_app, token_mint: str):
     if not state["positions"]:
-        # Если позиций нет, закрываем любую активную или первую попавшуюся
-        if state["positions"]:
-            token_mint = list(state["positions"].keys())[0]
-        else:
-            return
+        return
     
     if token_mint not in state["positions"]:
-        if state["positions"]:
-            token_mint = list(state["positions"].keys())[0]
-        else:
-            return
+        token_mint = list(state["positions"].keys())[0]
 
     pos = state["positions"].pop(token_mint)
     symbol = pos["symbol"]
@@ -126,7 +117,7 @@ async def process_sell_signal(bot_app, token_mint: str):
 
     icon = "🟩" if is_win else "🟥"
     msg = (
-        f"{icon} *[PAPER SELL — SOLANA RPC]*\n"
+        f"{icon} *[PAPER SELL — COPIED]*\n"
         f"Монета: *{symbol}*\n"
         f"Цена выхода: `${exit_price:.6f}`\n"
         f"Чистый PnL: *${pnl_usd:+.2f} ({pnl_pct:+.1f}%)*\n"
@@ -134,97 +125,64 @@ async def process_sell_signal(bot_app, token_mint: str):
     )
     await send_tg_message(bot_app, msg)
 
-# ==================== ПРЯМОЙ МОНИТОРИНГ SOLANA RPC ====================
-async def solana_rpc_listener(bot_app):
-    rpc_url = "https://api.mainnet-beta.solana.com"
-    seen_sigs = set()
-
-    # Сначала просто заполняем историю, чтобы не триггерить старые сделки при запуске
-    payload = {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "getSignaturesForAddress",
-        "params": [TARGET_WALLET, {"limit": 15}]
+# ==================== SOLSCAN API СЛУШАТЕЛЬ ====================
+async def solscan_api_listener(bot_app):
+    url = f"https://public-api.solscan.io/account/transactions?account={TARGET_WALLET}&limit=10"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "application/json"
     }
     
+    seen_sigs = set()
+
+    # Первичная инициализация
     try:
-        resp = requests.post(rpc_url, json=payload, timeout=10).json()
-        items = resp.get("result", [])
-        for item in items:
-            sig = item.get("signature")
-            if sig:
-                seen_sigs.add(sig)
-        logging.info(f"Solana RPC слушатель запущен. Пропущено старых транзакций: {len(seen_sigs)}")
+        resp = requests.get(url, headers=headers, timeout=10)
+        if resp.status_code == 200:
+            items = resp.json()
+            if isinstance(items, list):
+                for tx in items:
+                    sig = tx.get("txHash")
+                    if sig:
+                        seen_sigs.add(sig)
+            logging.info(f"Solscan API подключен. Запомнено транзакций: {len(seen_sigs)}")
     except Exception as e:
-        logging.error(f"Ошибка инициализации Solana RPC: {e}")
+        logging.error(f"Ошибка инициализации Solscan API: {e}")
 
     while True:
         try:
-            resp = requests.post(rpc_url, json=payload, timeout=10).json()
-            items = resp.get("result", [])
-            
-            for item in reversed(items):
-                sig = item.get("signature")
-                if not sig or sig in seen_sigs:
-                    continue
-                
-                seen_sigs.add(sig)
-                if len(seen_sigs) > 200:
-                    seen_sigs.pop()
+            resp = requests.get(url, headers=headers, timeout=10)
+            if resp.status_code == 200:
+                items = resp.json()
+                if isinstance(items, list):
+                    for tx in reversed(items):
+                        sig = tx.get("txHash")
+                        if not sig or sig in seen_sigs:
+                            continue
+                        
+                        seen_sigs.add(sig)
+                        if len(seen_sigs) > 100:
+                            seen_sigs.pop()
 
-                # Запрашиваем детали транзакции
-                tx_payload = {
-                    "jsonrpc": "2.0",
-                    "id": 1,
-                    "method": "getTransaction",
-                    "params": [sig, {"maxSupportedTransactionVersion": 0, "encoding": "jsonParsed"}]
-                }
-                tx_resp = requests.post(rpc_url, json=tx_payload, timeout=10).json()
-                result = tx_resp.get("result")
-                
-                if not result:
-                    continue
+                        logging.info(f"Новая транзакция в Solscan API: {sig[:10]}")
 
-                meta = result.get("meta", {})
-                if meta.get("err"):
-                    continue # Пропускаем неудачные транзакции
-
-                # Ищем задействованные токены в балансах
-                post_balances = meta.get("postTokenBalances", [])
-                pre_balances = meta.get("preTokenBalances", [])
-                
-                token_mint = None
-                for b in post_balances:
-                    mint = b.get("mint")
-                    if mint and mint != "So11111111111111111111111111111111111111112":
-                        token_mint = mint
-                        break
-                
-                if not token_mint:
-                    for b in pre_balances:
-                        mint = b.get("mint")
-                        if mint and mint != "So11111111111111111111111111111111111111112":
-                            token_mint = mint
-                            break
-
-                if token_mint:
-                    # Проверяем логи или направление по изменению баланса SOL
-                    pre_sol = meta.get("preBalances", [0])[0]
-                    post_sol = meta.get("postBalances", [0])[0]
-                    
-                    if post_sol < pre_sol:
-                        # SOL уменьшился -> покупка токена
-                        logging.info(f"Обнаружена покупка через RPC для токена {token_mint}")
-                        asyncio.create_task(process_buy_signal(bot_app, token_mint))
-                    else:
-                        # SOL увеличился или остался прежним -> продажа/выход
-                        logging.info(f"Обнаружена продажа через RPC для токена {token_mint}")
-                        asyncio.create_task(process_sell_signal(bot_app, token_mint))
-
+                        # Достаем задействованные токены из транзакции
+                        # Если кошелек совершал обмен, запрашиваем актуальный токен через DexScreener для этого кошелька
+                        ds_url = f"https://api.dexscreener.com/latest/dex/tokens/{TARGET_WALLET}"
+                        ds_resp = requests.get(ds_url, timeout=5).json()
+                        pairs = ds_resp.get("pairs", [])
+                        
+                        if pairs:
+                            token_mint = pairs[0].get("baseToken", {}).get("address")
+                            if token_mint:
+                                if state["positions"]:
+                                    asyncio.create_task(process_sell_signal(bot_app, token_mint))
+                                else:
+                                    asyncio.create_task(process_buy_signal(bot_app, token_mint))
         except Exception as e:
-            logging.error(f"Ошибка в цикле Solana RPC: {e}")
+            logging.error(f"Ошибка в цикле Solscan API: {e}")
 
-        await asyncio.sleep(6)
+        await asyncio.sleep(7)
 
 # ==================== TELEGRAM КОМАНДЫ ====================
 async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -235,7 +193,7 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     pnl_pct = (total_pnl / state["initial_balance"]) * 100
 
     report = (
-        f"📊 *ОТЧЁТ ПО PAPER TRADING (RPC)*\n\n"
+        f"📊 *ОТЧЁТ ПО PAPER TRADING*\n\n"
         f"💵 *Баланс:* `${state['balance']:.2f}` (Старт: `${state['initial_balance']:.2f}`)\n"
         f"📈 *Чистый PnL:* *${total_pnl:+.2f} ({pnl_pct:+.1f}%)*\n"
         f"🎯 *Всего сигналов:* {state['total_signals']}\n"
@@ -275,8 +233,7 @@ async def main():
     bot_app.add_handler(CommandHandler("positions", cmd_positions))
     bot_app.add_handler(CommandHandler("reset", cmd_reset))
 
-    # Запускаем прямой мониторинг блокчейна
-    asyncio.create_task(solana_rpc_listener(bot_app))
+    asyncio.create_task(solscan_api_listener(bot_app))
 
     await bot_app.initialize()
     await bot_app.start()
