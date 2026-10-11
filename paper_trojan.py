@@ -7,7 +7,7 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 # ==================== НАСТРОЙКИ ====================
-TELEGRAM_BOT_TOKEN = "8899550041:AAGPwEuBfufBK3EREkOHzyCobkBaij-ziJA"
+TELEGRAM_BOT_TOKEN = "8899550041:AAF7OwJKDN3fzwEtcfHW5Xs7L828W-_m-rU"
 TELEGRAM_CHAT_ID = "5689611608"
 
 # Адрес целевого кошелька для отслеживания
