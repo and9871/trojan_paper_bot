@@ -127,65 +127,82 @@ async def process_sell_signal(bot_app, token_mint: str):
     )
     await send_tg_message(bot_app, msg)
 
-# ==================== СЛУШАТЕЛЬ (С ЗАЩИТОЙ ОТ ПУСТЫХ ОТВЕТОВ) ====================
-async def gmgn_listener(bot_app):
-    url = f"https://gmgn.ai/defi/quotation/v1/wallet/sol/transactions/{TARGET_WALLET}?limit=10&cost=10"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        "Accept": "application/json, text/plain, */*",
-        "Referer": "https://gmgn.ai/"
+# ==================== НАДЕЖНЫЙ СЛУШАТЕЛЬ (SOLANA RPC / DEXSCREENER) ====================
+async def reliable_listener(bot_app):
+    # Используем публичный RPC Solana для запроса последних транзакций кошелька
+    rpc_url = "https://api.mainnet-beta.solana.com"
+    seen_sigs = set()
+
+    # Первичная инициализация подписи транзакций
+    payload = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "getSignaturesForAddress",
+        "params": [TARGET_WALLET, {"limit": 10}]
     }
     
-    seen_txs = set()
-    
     try:
-        resp = requests.get(url, headers=headers, timeout=10)
-        if resp.status_code == 200 and resp.text.strip():
-            data = resp.json()
-            activities = data.get("data", {}).get("list", []) or []
-            for act in activities:
-                tx_hash = act.get("tx_hash")
-                if tx_hash:
-                    seen_txs.add(tx_hash)
-            logging.info(f"Слушатель подключен. Запомнено транзакций: {len(seen_txs)}")
-        else:
-            logging.warning("GMGN временно недоступен или защищен, повторим попытку в цикле...")
+        resp = requests.post(rpc_url, json=payload, timeout=10).json()
+        items = resp.get("result", [])
+        for item in items:
+            sig = item.get("signature")
+            if sig:
+                seen_sigs.add(sig)
+        logging.info(f"Слушатель Solana RPC подключен. Запомнено транзакций: {len(seen_sigs)}")
     except Exception as e:
-        logging.error(f"Ошибка инициализации слушателя: {e}")
+        logging.error(f"Ошибка инициализации Solana RPC: {e}")
 
     while True:
         try:
-            resp = requests.get(url, headers=headers, timeout=10)
-            if resp.status_code == 200 and resp.text.strip():
-                data = resp.json()
-                activities = data.get("data", {}).get("list", []) or []
+            resp = requests.post(rpc_url, json=payload, timeout=10).json()
+            items = resp.get("result", [])
+            
+            for item in reversed(items):
+                sig = item.get("signature")
+                if not sig or sig in seen_sigs:
+                    continue
                 
-                for act in reversed(activities):
-                    tx_hash = act.get("tx_hash")
-                    if not tx_hash or tx_hash in seen_txs:
-                        continue
-                    
-                    seen_txs.add(tx_hash)
-                    if len(seen_txs) > 300:
-                        seen_txs.pop()
+                seen_sigs.add(sig)
+                if len(seen_sigs) > 200:
+                    seen_sigs.pop()
 
-                    action = act.get("swap_type", "").lower()
-                    token_mint = act.get("token_address")
-                    
-                    if not token_mint:
-                        continue
+                # Запрашиваем детали транзакции, чтобы найти измененные токены
+                tx_payload = {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "getTransaction",
+                    "params": [sig, {"maxSupportedTransactionVersion": 0}]
+                }
+                tx_resp = requests.post(rpc_url, json=tx_payload, timeout=10).json()
+                result = tx_resp.get("result")
+                
+                if not result:
+                    continue
 
-                    logging.info(f"Новое событие: {action} для {token_mint}")
+                # Ищем токен в пост-балансах транзакции
+                meta = result.get("meta", {})
+                token_mint = None
+                all_bals = meta.get("postTokenBalances", []) + meta.get("preTokenBalances", [])
+                for b in all_bals:
+                    mint = b.get("mint")
+                    if mint and mint != "So11111111111111111111111111111111111111112":
+                        token_mint = mint
+                        break
 
-                    if "buy" in action:
-                        asyncio.create_task(process_buy_signal(bot_app, token_mint))
-                    elif "sell" in action:
+                if token_mint:
+                    # Определяем покупка или продажа по логам/изменениям
+                    logs = str(meta.get("logMessages", [])).lower()
+                    if any(w in logs for w in ["sell", "close", "transfer"]):
+                        logging.info(f"Обнаружена продажа для {token_mint}")
                         asyncio.create_task(process_sell_signal(bot_app, token_mint))
-        except Exception as e:
-            # Не падаем, просто ждем следующий цикл опроса
-            pass
+                    else:
+                        logging.info(f"Обнаружена покупка для {token_mint}")
+                        asyncio.create_task(process_buy_signal(bot_app, token_mint))
 
-        await asyncio.sleep(8)
+        except Exception as e:
+            logging.error(f"Ошибка в цикле слушателя Solana: {e}")
+
+        await asyncio.sleep(7)
 
 # ==================== TELEGRAM КОМАНДЫ ====================
 async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -236,7 +253,8 @@ async def main():
     bot_app.add_handler(CommandHandler("positions", cmd_positions))
     bot_app.add_handler(CommandHandler("reset", cmd_reset))
 
-    asyncio.create_task(gmgn_listener(bot_app))
+    # Запускаем надежный Solana RPC слушатель
+    asyncio.create_task(reliable_listener(bot_app))
 
     await bot_app.initialize()
     await bot_app.start()
