@@ -9,7 +9,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 # ==================== НАСТРОЙКИ ====================
 TELEGRAM_BOT_TOKEN = "8899550041:AAGKxh6OUV8MR6l4_5m3ZUHI8zdkh4ZjbDw"
-TELEGRAM_CHAT_ID = "5689611608"  # Твой ID в Telegram (получи через @userinfobot)
+TELEGRAM_CHAT_ID = "5689611608"  # Твой ID в Telegram
 HELIUS_API_KEY = "ef5ff0b7-0073-40ea-8d5a-d8e334a64809"
 
 # Адрес кошелька для отслеживания
@@ -36,7 +36,7 @@ state = {
 
 logging.basicConfig(level=logging.INFO)
 
-# ==================== ВПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
+# ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
 def get_token_price(token_mint: str) -> float:
     """Получение текущей цены токена в USD через DexScreener API."""
     try:
@@ -155,7 +155,6 @@ async def process_sell_signal(app, token_mint: str):
 async def solana_listener(app):
     ws_url = f"wss://mainnet.helius-rpc.com/?api-key={HELIUS_API_KEY}"
     
-    # Подписка на транзакции целевого кошелька
     payload = {
         "jsonrpc": "2.0",
         "id": 1,
@@ -178,25 +177,22 @@ async def solana_listener(app):
                 
                 async for msg in ws:
                     data = json.loads(msg)
-                    # Фильтрация и парсинг сделок (упрощенная демонстрация)
                     if "params" in data and "result" in data["params"]:
                         logs = str(data["params"]["result"])
                         
-                        # Детекция покупки/продажи (поиск Raydium / Pump.fun программ)
                         if "route" in logs or "swap" in logs.lower():
-                            # Извлечение адреса токена (симуляция парсинга)
                             dummy_token = "So11111111111111111111111111111111111111112"
                             if "buy" in logs.lower():
                                 asyncio.create_task(process_buy_signal(app, dummy_token, 0.001, 0.10))
                             elif "sell" in logs.lower():
-        asyncio.create_task(process_sell_signal(app, dummy_token))
+                                asyncio.create_task(process_sell_signal(app, dummy_token))
 
-except Exception as e:
-    print(f"Ошибка WebSocket: {e}. Переподключение через 5 сек...")
-    try:
-        await asyncio.sleep(5)
-    except RuntimeError:
-        break
+        except Exception as e:
+            print(f"Ошибка WebSocket: {e}. Переподключение через 5 сек...")
+            try:
+                await asyncio.sleep(5)
+            except RuntimeError:
+                break
 
 # ==================== TELEGRAM КОМАНДЫ ====================
 async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -244,12 +240,10 @@ async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
 
-    # Регистрация команд
     app.add_handler(CommandHandler("stats", cmd_stats))
     app.add_handler(CommandHandler("positions", cmd_positions))
     app.add_handler(CommandHandler("reset", cmd_reset))
 
-  # Запуск параллельного слушателя Solana безопасно для любых версий Python
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
