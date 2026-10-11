@@ -191,8 +191,11 @@ async def solana_listener(app):
                             elif "sell" in logs.lower():
                                 asyncio.create_task(process_sell_signal(app, dummy_token))
         except Exception as e:
-            logging.error(f"Ошибка WebSocket: {e}. Переподключение через 5 сек...")
-            await asyncio.sleep(5)
+    print(f"Ошибка WebSocket: {e}. Переподключение через 5 сек...")
+    try:
+        await asyncio.sleep(5)
+    except RuntimeError:
+        break
 
 # ==================== TELEGRAM КОМАНДЫ ====================
 async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -258,4 +261,7 @@ def main():
     app.run_polling()
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        pass
