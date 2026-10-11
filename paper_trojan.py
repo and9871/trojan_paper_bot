@@ -10,7 +10,7 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 TELEGRAM_BOT_TOKEN = "8899550041:AAH1i-I9gatSZHJHYJM-c7pFHGlQ5d5kAZY"
 TELEGRAM_CHAT_ID = "5689611608"
 
-# Целевой кошелек с твоего скриншота
+# Целевой кошелек
 TARGET_WALLET = "4NGX3sD6PQJLwPCSHdLTACFzLRqR1JhpUEtjpsmCAwGn"
 
 # Параметры симуляции
@@ -80,7 +80,7 @@ async def process_buy_signal(bot_app, token_mint: str):
     }
 
     msg = (
-        f"🟢 *[PAPER BUY — COPIED]*\n"
+        f"🟢 *[PAPER BUY — LIVE]*\n"
         f"Монета: *{symbol}*\n"
         f"Минт: `{token_mint}`\n"
         f"Цена входа: `${execution_price:.6f}`\n"
@@ -117,7 +117,7 @@ async def process_sell_signal(bot_app, token_mint: str):
 
     icon = "🟩" if is_win else "🟥"
     msg = (
-        f"{icon} *[PAPER SELL — COPIED]*\n"
+        f"{icon} *[PAPER SELL — LIVE]*\n"
         f"Монета: *{symbol}*\n"
         f"Цена выхода: `${exit_price:.6f}`\n"
         f"Чистый PnL: *${pnl_usd:+.2f} ({pnl_pct:+.1f}%)*\n"
@@ -125,64 +125,37 @@ async def process_sell_signal(bot_app, token_mint: str):
     )
     await send_tg_message(bot_app, msg)
 
-# ==================== SOLSCAN API СЛУШАТЕЛЬ ====================
-async def solscan_api_listener(bot_app):
-    url = f"https://public-api.solscan.io/account/transactions?account={TARGET_WALLET}&limit=10"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Accept": "application/json"
-    }
+# ==================== СВЕРХБЫСТРЫЙ DEXSCREENER МОНИТОР ====================
+async def fast_dex_listener(bot_app):
+    seen_tokens = set()
     
-    seen_sigs = set()
-
-    # Первичная инициализация
-    try:
-        resp = requests.get(url, headers=headers, timeout=10)
-        if resp.status_code == 200:
-            items = resp.json()
-            if isinstance(items, list):
-                for tx in items:
-                    sig = tx.get("txHash")
-                    if sig:
-                        seen_sigs.add(sig)
-            logging.info(f"Solscan API подключен. Запомнено транзакций: {len(seen_sigs)}")
-    except Exception as e:
-        logging.error(f"Ошибка инициализации Solscan API: {e}")
-
     while True:
         try:
-            resp = requests.get(url, headers=headers, timeout=10)
-            if resp.status_code == 200:
-                items = resp.json()
-                if isinstance(items, list):
-                    for tx in reversed(items):
-                        sig = tx.get("txHash")
-                        if not sig or sig in seen_sigs:
-                            continue
-                        
-                        seen_sigs.add(sig)
-                        if len(seen_sigs) > 100:
-                            seen_sigs.pop()
-
-                        logging.info(f"Новая транзакция в Solscan API: {sig[:10]}")
-
-                        # Достаем задействованные токены из транзакции
-                        # Если кошелек совершал обмен, запрашиваем актуальный токен через DexScreener для этого кошелька
-                        ds_url = f"https://api.dexscreener.com/latest/dex/tokens/{TARGET_WALLET}"
-                        ds_resp = requests.get(ds_url, timeout=5).json()
-                        pairs = ds_resp.get("pairs", [])
-                        
-                        if pairs:
-                            token_mint = pairs[0].get("baseToken", {}).get("address")
-                            if token_mint:
-                                if state["positions"]:
-                                    asyncio.create_task(process_sell_signal(bot_app, token_mint))
-                                else:
-                                    asyncio.create_task(process_buy_signal(bot_app, token_mint))
+            # Запрашиваем последние пары, связанные с кошельком или токенами на нем
+            url = f"https://api.dexscreener.com/latest/dex/tokens/{TARGET_WALLET}"
+            resp = requests.get(url, timeout=5).json()
+            pairs = resp.get("pairs", [])
+            
+            if pairs:
+                for pair in pairs:
+                    token_mint = pair.get("baseToken", {}).get("address")
+                    if not token_mint or token_mint in seen_tokens:
+                        continue
+                    
+                    seen_tokens.add(token_mint)
+                    if len(seen_tokens) > 50:
+                        seen_tokens.pop()
+                    
+                    logging.info(f"Обнаружен новый токен в поле зрения кошелька: {token_mint}")
+                    
+                    if state["positions"]:
+                        asyncio.create_task(process_sell_signal(bot_app, token_mint))
+                    else:
+                        asyncio.create_task(process_buy_signal(bot_app, token_mint))
         except Exception as e:
-            logging.error(f"Ошибка в цикле Solscan API: {e}")
+            logging.error(f"Ошибка в DexScreener мониторе: {e}")
 
-        await asyncio.sleep(7)
+        await asyncio.sleep(4)
 
 # ==================== TELEGRAM КОМАНДЫ ====================
 async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -233,7 +206,7 @@ async def main():
     bot_app.add_handler(CommandHandler("positions", cmd_positions))
     bot_app.add_handler(CommandHandler("reset", cmd_reset))
 
-    asyncio.create_task(solscan_api_listener(bot_app))
+    asyncio.create_task(fast_dex_listener(bot_app))
 
     await bot_app.initialize()
     await bot_app.start()
