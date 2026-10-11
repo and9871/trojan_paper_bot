@@ -8,7 +8,7 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 # ==================== НАСТРОЙКИ ====================
-TELEGRAM_BOT_TOKEN = "8899550041:AAH8FzZlvOI1yNIHqkpWs7pCwk1q_90Jv7M"
+TELEGRAM_BOT_TOKEN = "8899550041:AAGKxh6OUV8MR6l4_5m3ZUHI8zdkh4ZjbDw"
 TELEGRAM_CHAT_ID = "5689611608"  # Твой ID в Telegram (получи через @userinfobot)
 HELIUS_API_KEY = "ef5ff0b7-0073-40ea-8d5a-d8e334a64809"
 
