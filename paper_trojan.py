@@ -129,29 +129,32 @@ async def process_sell_signal(bot_app, token_mint: str):
 
 # ==================== GMGN.AI СЛУШАТЕЛЬ ====================
 async def gmgn_listener(bot_app):
-    url = f"https://gmgn.ai/api/v1/wallet_activity/sol?wallet={TARGET_WALLET}&limit=10"
+    url = f"https://gmgn.ai/defi/quotation/v1/wallet/sol/transactions/{TARGET_WALLET}?limit=10&cost=10"
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Referer": "https://gmgn.ai/"
     }
     
     seen_txs = set()
     
-    # Инициализация: запоминаем текущие сделки, чтобы не дублировать старое при запуске
     try:
-        resp = requests.get(url, headers=headers, timeout=10).json()
-        activities = resp.get("data", {}).get("activities", [])
+        resp = requests.get(url, headers=headers, timeout=10)
+        data = resp.json()
+        activities = data.get("data", {}).get("list", [])
         for act in activities:
             tx_hash = act.get("tx_hash")
             if tx_hash:
                 seen_txs.add(tx_hash)
         logging.info(f"GMGN успешно подключен. Запомнено транзакций: {len(seen_txs)}")
     except Exception as e:
-        logging.error(f"Ошибка инициализации GMGN: {e}")
+        logging.error(f"Ошибка инициализации GMGN API: {e}")
 
     while True:
         try:
-            resp = requests.get(url, headers=headers, timeout=10).json()
-            activities = resp.get("data", {}).get("activities", [])
+            resp = requests.get(url, headers=headers, timeout=10)
+            data = resp.json()
+            activities = data.get("data", {}).get("list", [])
             
             for act in reversed(activities):
                 tx_hash = act.get("tx_hash")
@@ -162,7 +165,7 @@ async def gmgn_listener(bot_app):
                 if len(seen_txs) > 300:
                     seen_txs.pop()
 
-                action = act.get("event", "").lower()
+                action = act.get("swap_type", "").lower()
                 token_mint = act.get("token_address")
                 
                 if not token_mint:
@@ -176,9 +179,9 @@ async def gmgn_listener(bot_app):
                     asyncio.create_task(process_sell_signal(bot_app, token_mint))
 
         except Exception as e:
-            logging.error(f"Ошибка опроса GMGN: {e}")
+            logging.error(f"Ошибка опроса GMGN API: {e}")
 
-        await asyncio.sleep(6) # Опрос каждые 6 секунд
+        await asyncio.sleep(8)
 
 # ==================== TELEGRAM КОМАНДЫ ====================
 async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
