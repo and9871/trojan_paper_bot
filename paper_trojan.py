@@ -5,7 +5,7 @@ import time
 import requests
 import websockets
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+from telegram.ext import Application, CommandHandler, ContextTypes
 
 # ==================== НАСТРОЙКИ ====================
 TELEGRAM_BOT_TOKEN = "8899550041:AAGKxh6OUV8MR6l4_5m3ZUHI8zdkh4ZjbDw"
@@ -51,15 +51,15 @@ def get_token_info(token_mint: str):
         logging.error(f"Ошибка получения данных токена {token_mint}: {e}")
     return 0.0, token_mint[:6]
 
-async def send_tg_message(app, text: str):
+async def send_tg_message(bot_app, text: str):
     if TELEGRAM_CHAT_ID:
         try:
-            await app.bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=text, parse_mode="Markdown")
+            await bot_app.bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=text, parse_mode="Markdown")
         except Exception as e:
             logging.error(f"Ошибка отправки Telegram: {e}")
 
 # ==================== ЛОГИКА ТОРГОВЛИ ====================
-async def process_buy_signal(app, token_mint: str):
+async def process_buy_signal(bot_app, token_mint: str):
     state["total_signals"] += 1
 
     initial_price, symbol = get_token_info(token_mint)
@@ -69,7 +69,7 @@ async def process_buy_signal(app, token_mint: str):
     estimated_impact = 0.05 
     if estimated_impact > PRICE_IMPACT_LIMIT:
         state["blocked_trades"] += 1
-        await send_tg_message(app, f"🛑 *[СДЕЛКА БЛОКИРОВАНА]* Токен: `{symbol}` (Price Impact превышен)")
+        await send_tg_message(bot_app, f"🛑 *[СДЕЛКА БЛОКИРОВАНА]* Токен: `{symbol}` (Price Impact превышен)")
         return
 
     await asyncio.sleep(LATENCY_DELAY)
@@ -81,11 +81,11 @@ async def process_buy_signal(app, token_mint: str):
     price_change = (execution_price - initial_price) / initial_price if initial_price > 0 else 0
     if price_change > SLIPPAGE_LIMIT:
         state["blocked_trades"] += 1
-        await send_tg_message(app, f"🛑 *[СДЕЛКА БЛОКИРОВАНА]* Токен: `{symbol}` (Проскальзывание превышено)")
+        await send_tg_message(bot_app, f"🛑 *[СДЕЛКА БЛОКИРОВАНА]* Токен: `{symbol}` (Проскальзывание превышено)")
         return
 
     if state["balance"] < TRADE_AMOUNT_USD:
-        await send_tg_message(app, "⚠️ *[ОШИБКА]* Недостаточно виртуального баланса для покупки!")
+        await send_tg_message(bot_app, "⚠️ *[ОШИБКА]* Недостаточно виртуального баланса для покупки!")
         return
 
     state["balance"] -= TRADE_AMOUNT_USD
@@ -105,9 +105,9 @@ async def process_buy_signal(app, token_mint: str):
         f"Сумма: `${TRADE_AMOUNT_USD}`\n"
         f"Баланс: `${state['balance']:.2f}`"
     )
-    await send_tg_message(app, msg)
+    await send_tg_message(bot_app, msg)
 
-async def process_sell_signal(app, token_mint: str):
+async def process_sell_signal(bot_app, token_mint: str):
     if not state["positions"]:
         return
     
@@ -141,10 +141,10 @@ async def process_sell_signal(app, token_mint: str):
         f"Чистый PnL: *${pnl_usd:+.2f} ({pnl_pct:+.1f}%)*\n"
         f"Баланс: `${state['balance']:.2f}`"
     )
-    await send_tg_message(app, msg)
+    await send_tg_message(bot_app, msg)
 
 # ==================== WEBSOCKET СЛУШАТЕЛЬ ====================
-async def solana_listener(app):
+async def solana_listener(bot_app):
     ws_url = f"wss://mainnet.helius-rpc.com/?api-key={HELIUS_API_KEY}"
     
     payload = {
@@ -173,7 +173,6 @@ async def solana_listener(app):
                         tx_result = data["params"]["result"]
                         logs_str = str(tx_result).lower()
                         
-                        # ДИНАМИЧЕСКИЙ СБОР ЛЮБОГО ТОКЕНА ИЗ ТРАНЗАКЦИИ
                         token_mint = "So11111111111111111111111111111111111111112"
                         try:
                             meta = tx_result.get("transaction", {}).get("meta", {})
@@ -188,9 +187,9 @@ async def solana_listener(app):
 
                         if any(kw in logs_str for kw in ["swap", "route", "pump", "raydium", "jupiter"]):
                             if any(b_kw in logs_str for b_kw in ["buy", "mint", "create"]):
-                                asyncio.create_task(process_buy_signal(app, token_mint))
+                                asyncio.create_task(process_buy_signal(bot_app, token_mint))
                             elif any(s_kw in logs_str for s_kw in ["sell", "close"]):
-                                asyncio.create_task(process_sell_signal(app, token_mint))
+                                asyncio.create_task(process_sell_signal(bot_app, token_mint))
 
         except Exception as e:
             print(f"Ошибка WebSocket: {e}. Переподключение...")
@@ -238,23 +237,26 @@ async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     state["closed_trades"].clear()
     await update.message.reply_text("🔄 Сброшено до $200!")
 
-def main():
-    app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
-    app.add_handler(CommandHandler("stats", cmd_stats))
-    app.add_handler(CommandHandler("positions", cmd_positions))
-    app.add_handler(CommandHandler("reset", cmd_reset))
+async def main():
+    bot_app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    
+    bot_app.add_handler(CommandHandler("stats", cmd_stats))
+    bot_app.add_handler(CommandHandler("positions", cmd_positions))
+    bot_app.add_handler(CommandHandler("reset", cmd_reset))
 
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        
-    loop.create_task(solana_listener(app))
-    app.run_polling()
+    # Запускаем фоновый слушатель Solana параллельно с ботом
+    asyncio.create_task(solana_listener(bot_app))
+
+    await bot_app.initialize()
+    await bot_app.start()
+    await bot_app.updater.start_polling()
+
+    # Держим приложение запущенным
+    stop_event = asyncio.Event()
+    await stop_event.wait()
 
 if __name__ == "__main__":
     try:
-        main()
+        asyncio.run(main())
     except KeyboardInterrupt:
         pass
